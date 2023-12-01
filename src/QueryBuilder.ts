@@ -7,6 +7,8 @@ import Errors from "./Errors";
 
 export default class QueryBuilder {
     private _collectionName: string;
+    private _createCollectionName?: string;
+    private _createCollectionColumns?: Array<string>;
     private _selectFields: Array<string>;
     private _whereStatement: string;
     private _offsetStatement: string;
@@ -19,6 +21,8 @@ export default class QueryBuilder {
     public _stmtManager: LogicalStatementManager<SqlSimpleStatement>;
 
     public _joinsList: Array<string>;
+
+    private _parentQueryBuilder?: QueryBuilder;
 
     public static readonly TYPES = {
         INT: 'INT',
@@ -49,9 +53,10 @@ export default class QueryBuilder {
             OUTER: 'OUTER JOIN',
             INNER: 'INNER JOIN',
         },
+        CREATE: 'CREATE',
     }
 
-    constructor() {
+    constructor(config?: { parentQueryBuilder?: QueryBuilder }) {
         this._values = [];
         this._collectionName = '';
         this._selectFields = [];
@@ -65,6 +70,9 @@ export default class QueryBuilder {
 
         this._stmtManager = new LogicalStatementManager();
         this._joinsList = [];
+
+
+        this._parentQueryBuilder = config?.parentQueryBuilder;
     }
 
     public from(collectionName: string): QueryBuilder {
@@ -77,7 +85,7 @@ export default class QueryBuilder {
         return this;
     }
 
-    public newStmt(
+    private newStmt(
         leftOperand: string | SqlSimpleStatement | QueryBuilder,
         operator?: string,
         rightOperand?: string | number | Array<string> | Array<number> | SqlSimpleStatement,
@@ -100,17 +108,21 @@ export default class QueryBuilder {
     public where(
         leftOperand: string | SqlSimpleStatement | QueryBuilder,
         operator?: string,
-        rightOperand?: string | number | Array<string> | Array<number> | SqlSimpleStatement,
+        rightOperand?: string | number | Array<string> | Array<number> | SqlSimpleStatement | QueryBuilder,
         rightOperandType?: string
     ): QueryBuilder {
         this._lastClause = QueryBuilder.CLAUSE.WHERE;
+        if (rightOperand instanceof QueryBuilder) {
+            const subQueryAsString = `(\n\t${rightOperand.getBeautifulQuery().replace(/\n/g, '\n\t')}\n)`;
+            return this.newStmt(leftOperand, operator, subQueryAsString, rightOperandType);
+        }
         return this.newStmt(leftOperand, operator, rightOperand, rightOperandType);
     }
 
     public and(
         leftOperand: string | SqlSimpleStatement | QueryBuilder,
         operator?: string,
-        rightOperand?: string | number | Array<string> | Array<number> | SqlSimpleStatement,
+        rightOperand?: string | number | Array<string> | Array<number> | SqlSimpleStatement | QueryBuilder,
         rightOperandType?: string
     ): QueryBuilder {
 
@@ -118,6 +130,10 @@ export default class QueryBuilder {
             this._stmtManager.and(this._stmtManager);
         }
         else {
+            if (rightOperand instanceof QueryBuilder) {
+            const subQueryAsString = `(\n\t${rightOperand.getBeautifulQuery().replace(/\n/g, '\n\t')}\n)`;
+                return this.and(leftOperand, operator, subQueryAsString, rightOperandType);
+            }
             this.checkParametersForSqlStmt(operator, rightOperand);
             this._stmtManager.and(new SqlSimpleStatement(
                 leftOperand, operator!, rightOperand!, rightOperandType
@@ -237,6 +253,18 @@ export default class QueryBuilder {
         return this;
     }
 
+    public createTable(tableName: string): QueryBuilder {
+        this._createCollectionName = tableName;
+        return this;
+    }
+
+    public addColumn(name: string, type: string, constraintsString: string): QueryBuilder {
+        if (!this._createCollectionColumns)
+            this._createCollectionColumns = [];
+        this._createCollectionColumns.push(`${name} ${type} ${constraintsString}`);
+        return this;
+    }
+
 
     public getQuery(): string {
         return `SELECT ${this._selectFields} FROM ${this._collectionName} WHERE ${this._curStatement}`;
@@ -246,13 +274,13 @@ export default class QueryBuilder {
         this.checkLastClauseWasClosed();
 
         let query = '';
-        query += this._selectFields.length !== 0 ? ('SELECT ' + this._selectFields.join(', ')) : ''; // if no fields -> *
-        query += this._collectionName ? ('\nFROM ' + this._collectionName) : '';
-        query += this._joinsList.length !== 0 ? ('\n' + this._joinsList.join('\n')) : '';
-        query += this._whereStatement ? ('\nWHERE ' + this._whereStatement) : '';
-        query += this._orderByStatement ? ('\n' + this._orderByStatement) : '';
-        query += this._limitStatement ? ('\n' + this._limitStatement) : '';
-        query += this._offsetStatement ? ('\n' + this._offsetStatement) : '';
+        query += this._selectFields.length !== 0 ? (`SELECT ${this._selectFields.join(', ')}`) : ''; // if no fields -> *
+        query += this._collectionName ? (`\nFROM ${this._collectionName}`) : '';
+        query += this._joinsList.length !== 0 ? (`\n${this._joinsList.join('\n')}`) : '';
+        query += this._whereStatement ? (`\nWHERE ${this._whereStatement}`) : '';
+        query += this._orderByStatement ? (`\n${this._orderByStatement}`) : '';
+        query += this._limitStatement ? (`\n${this._limitStatement}`) : '';
+        query += this._offsetStatement ? (`\n${this._offsetStatement}`) : '';
 
         return query;
     }
@@ -275,8 +303,53 @@ export default class QueryBuilder {
         return this._values;
     }
 
-    private addValue(value: number | string | Array<number> | Array<string>): number {
+    public addValue(value: number | string | Array<number> | Array<string>): number {
+        if (this._parentQueryBuilder !== undefined) {
+            return this._parentQueryBuilder.addValue(value);
+        }
         return this._values.push(value);
     }
 }
+
+
+const queryBuilder = new QueryBuilder();
+const subQueryBuilder = new QueryBuilder({ parentQueryBuilder: queryBuilder });
+const subQueryBuilder2 = new QueryBuilder({ parentQueryBuilder: queryBuilder });
+
+subQueryBuilder2.from('products')
+        .selectFields(['AVG(price)'])
+        .where('price2', '>', 100, 'INT')
+        .endWhere();
+subQueryBuilder.from('products')
+    .selectFields(['AVG(price)'])
+    .where('price', '>', subQueryBuilder2)
+    .and('p.id.11', '=', 11, 'INT')
+    .endWhere();
+
+queryBuilder.from('products AS p')
+    .selectFields(['p.id', 'p.price'])
+    .where('p.id', '=', 12, 'INT')
+    .and('p.price', '>', subQueryBuilder)
+    .endWhere();
+
+console.log(queryBuilder.getBeautifulQuery());
+console.log(queryBuilder.getValues());
+
+/*
+
+const subQueryBuilder = new QueryBuilder({ parentQueryBuilder: queryBuilder });
+then if we have parent query builder
+we will use the addValue of parent query builder
+
+WHERE
+	EXISTS (
+		SELECT
+			1
+		FROM
+			payment
+		WHERE
+			payment.customer_id = customer.customer_id
+	);
+
+*/
 
