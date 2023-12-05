@@ -7,7 +7,7 @@ export default class DbField {
         this._name = name;
     }
 
-    public get name (): string {
+    public get default (): string {
         return this._name;
     }
 

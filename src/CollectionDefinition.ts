@@ -27,6 +27,7 @@ export default class CollectionDefinition {
         return this._fields;
     }
 
+    // select fields ?
     public get fieldsList(): Array<string> {
         return this._fieldsList.map(field => `${this.getShortName()}.${field}`);
     }

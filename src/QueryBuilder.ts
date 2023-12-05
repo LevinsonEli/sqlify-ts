@@ -24,6 +24,8 @@ export default class QueryBuilder {
 
     private _parentQueryBuilder?: QueryBuilder;
 
+    private _generalQuery?: string;
+
     public static readonly TYPES = {
         INT: 'INT',
         DECIMAL: 'DECIMAL',
@@ -54,6 +56,9 @@ export default class QueryBuilder {
             INNER: 'INNER JOIN',
         },
         CREATE: 'CREATE',
+        INSERT: 'INSERT',
+        UPDATE: 'UPDATE',
+        DELETE: 'DELETE',
     }
 
     constructor(config?: { parentQueryBuilder?: QueryBuilder }) {
@@ -113,7 +118,7 @@ export default class QueryBuilder {
     ): QueryBuilder {
         this._lastClause = QueryBuilder.CLAUSE.WHERE;
         if (rightOperand instanceof QueryBuilder) {
-            const subQueryAsString = `(\n\t${rightOperand.getBeautifulQuery().replace(/\n/g, '\n\t')}\n)`;
+            const subQueryAsString = `(\n\t${rightOperand.getQuery().replace(/\n/g, '\n\t')}\n)`;
             return this.newStmt(leftOperand, operator, subQueryAsString, rightOperandType);
         }
         return this.newStmt(leftOperand, operator, rightOperand, rightOperandType);
@@ -131,7 +136,7 @@ export default class QueryBuilder {
         }
         else {
             if (rightOperand instanceof QueryBuilder) {
-            const subQueryAsString = `(\n\t${rightOperand.getBeautifulQuery().replace(/\n/g, '\n\t')}\n)`;
+            const subQueryAsString = `(\n\t${rightOperand.getQuery().replace(/\n/g, '\n\t')}\n)`;
                 return this.and(leftOperand, operator, subQueryAsString, rightOperandType);
             }
             this.checkParametersForSqlStmt(operator, rightOperand);
@@ -265,16 +270,48 @@ export default class QueryBuilder {
         return this;
     }
 
-
-    public getQuery(): string {
-        return `SELECT ${this._selectFields} FROM ${this._collectionName} WHERE ${this._curStatement}`;
+    public insert(collectionName: string, data: { [key: string] : number | string }): QueryBuilder {
+        this._lastClause = QueryBuilder.CLAUSE.INSERT;
+        this._generalQuery = `INSERT INTO ${collectionName} (${Object.keys(data)}) VALUES (${Object.values(data)})`;
+        return this;
     }
 
-    public getBeautifulQuery(): string {
+    public update(collectionName: string): QueryBuilder {
+        this._lastClause = QueryBuilder.CLAUSE.UPDATE;
+        this._generalQuery = `UPDATE ${collectionName}`;
+        return this;
+    }
+
+    public set(data: { [key: string] : number | string }): QueryBuilder {
+        this._generalQuery = `\nSET `;
+        for (const property in data) {
+            const newValNum = this.addValue(data[property]);
+            this._generalQuery += `${property} = ${newValNum},\n`;
+        }
+        this._generalQuery = this._generalQuery.slice(0, -2);
+        return this;
+    }
+
+    public deleteFrom(collectionName: string): QueryBuilder {
+        this._lastClause = QueryBuilder.CLAUSE.DELETE;
+        this._generalQuery = `DELETE FROM ${collectionName}`;
+        return this;
+    }
+
+    public getQuery(): string {
         this.checkLastClauseWasClosed();
 
+        if (this._lastClause === QueryBuilder.CLAUSE.INSERT)
+            return this._generalQuery!;
+        if (this._lastClause === QueryBuilder.CLAUSE.UPDATE) {
+            return `${this._generalQuery!}\nWHERE ${this._whereStatement}`;
+        }
+        if (this._lastClause === QueryBuilder.CLAUSE.DELETE) {
+            return `${this._generalQuery!}\nWHERE ${this._whereStatement}`;
+        }
+
         let query = '';
-        query += this._selectFields.length !== 0 ? (`SELECT ${this._selectFields.join(', ')}`) : ''; // if no fields -> *
+        query += this._selectFields.length !== 0 ? (`SELECT ${this._selectFields.join(', ')}`) : '*';
         query += this._collectionName ? (`\nFROM ${this._collectionName}`) : '';
         query += this._joinsList.length !== 0 ? (`\n${this._joinsList.join('\n')}`) : '';
         query += this._whereStatement ? (`\nWHERE ${this._whereStatement}`) : '';
